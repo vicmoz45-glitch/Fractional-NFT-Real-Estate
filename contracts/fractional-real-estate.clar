@@ -10,6 +10,10 @@
 (define-constant err-insufficient-shares (err u106))
 (define-constant err-transfer-not-allowed (err u107))
 (define-constant err-nothing-to-claim (err u108))
+(define-constant err-listing-not-found (err u109))
+(define-constant err-price-zero (err u110))
+(define-constant err-cannot-buy-own-token (err u111))
+(define-constant err-seller-not-owner (err u112))
 
 (define-non-fungible-token fractional-share uint)
 
@@ -40,6 +44,14 @@
 (define-map token-uri-map
     uint
     (string-ascii 256)
+)
+
+(define-map market-listings
+    uint
+    {
+        price: uint,
+        seller: principal
+    }
 )
 
 (define-public (create-property (name (string-ascii 64)) (total-shares uint))
@@ -182,4 +194,55 @@
 
 (define-read-only (get-contract-balance)
     (stx-get-balance (as-contract tx-sender))
+)
+
+(define-read-only (get-listing (token-id uint))
+    (map-get? market-listings token-id)
+)
+
+(define-public (list-in-marketplace (token-id uint) (price uint))
+    (let
+        (
+            (owner (unwrap! (nft-get-owner? fractional-share token-id) err-token-not-found))
+        )
+        (asserts! (is-eq tx-sender owner) err-not-token-owner)
+        (asserts! (> price u0) err-price-zero)
+        (try! (nft-transfer? fractional-share token-id tx-sender (as-contract tx-sender)))
+        (map-set market-listings token-id {
+            price: price,
+            seller: tx-sender
+        })
+        (ok true)
+    )
+)
+
+(define-public (unlist-in-marketplace (token-id uint))
+    (let
+        (
+            (listing (unwrap! (map-get? market-listings token-id) err-listing-not-found))
+            (seller (get seller listing))
+        )
+        (asserts! (is-eq tx-sender seller) err-not-token-owner)
+        (try! (as-contract (nft-transfer? fractional-share token-id tx-sender seller)))
+        (map-delete market-listings token-id)
+        (ok true)
+    )
+)
+
+(define-public (buy-from-marketplace (token-id uint))
+    (let
+        (
+            (listing (unwrap! (map-get? market-listings token-id) err-listing-not-found))
+            (price (get price listing))
+            (seller (get seller listing))
+            (owner (unwrap! (nft-get-owner? fractional-share token-id) err-token-not-found))
+            (buyer tx-sender)
+        )
+        (asserts! (not (is-eq buyer seller)) err-cannot-buy-own-token)
+        (asserts! (is-eq owner (as-contract tx-sender)) err-token-not-found)
+        (try! (stx-transfer? price buyer seller))
+        (try! (as-contract (nft-transfer? fractional-share token-id tx-sender buyer)))
+        (map-delete market-listings token-id)
+        (ok true)
+    )
 )
