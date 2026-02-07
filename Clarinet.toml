@@ -1,0 +1,28 @@
+[project]
+name = 'Fractional-NFT-Real-Estate'
+description = ''
+authors = []
+telemetry = true
+cache_dir = '.\.cache'
+requirements = []
+[contracts.fractional-real-estate]
+path = 'contracts/fractional-real-estate.clar'
+clarity_version = 3
+epoch = 'latest'
+
+[contracts.sip009-nft-trait]
+path = 'contracts/sip009-nft-trait.clar'
+clarity_version = 3
+epoch = 'latest'
+[repl.analysis]
+passes = ['check_checker']
+
+[repl.analysis.check_checker]
+strict = false
+trusted_sender = false
+trusted_caller = false
+callee_filter = false
+
+[repl.remote_data]
+enabled = false
+api_url = 'https://api.hiro.so'
