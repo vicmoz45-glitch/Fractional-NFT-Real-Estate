@@ -10,6 +10,12 @@
 (define-constant err-insufficient-shares (err u106))
 (define-constant err-transfer-not-allowed (err u107))
 (define-constant err-nothing-to-claim (err u108))
+(define-constant err-listing-not-found (err u109))
+(define-constant err-price-zero (err u110))
+(define-constant err-cannot-buy-own-token (err u111))
+(define-constant err-seller-not-owner (err u112))
+(define-constant err-buyback-not-active (err u200))
+(define-constant err-insufficient-buyback-funds (err u201))
 
 (define-non-fungible-token fractional-share uint)
 
@@ -23,7 +29,7 @@
         total-shares: uint,
         shares-minted: uint,
         dividend-per-share: uint,
-        total-dividends: uint
+        total-dividends: uint,
     }
 )
 
@@ -42,11 +48,28 @@
     (string-ascii 256)
 )
 
-(define-public (create-property (name (string-ascii 64)) (total-shares uint))
-    (let
-        (
-            (property-id (+ (var-get last-property-id) u1))
-        )
+(define-map market-listings
+    uint
+    {
+        price: uint,
+        seller: principal,
+    }
+)
+
+(define-map property-buyback-config
+    uint
+    {
+        price: uint,
+        balance: uint,
+        active: bool,
+    }
+)
+
+(define-public (create-property
+        (name (string-ascii 64))
+        (total-shares uint)
+    )
+    (let ((property-id (+ (var-get last-property-id) u1)))
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (asserts! (> total-shares u0) err-invalid-amount)
         (map-set properties property-id {
@@ -54,16 +77,18 @@
             total-shares: total-shares,
             shares-minted: u0,
             dividend-per-share: u0,
-            total-dividends: u0
+            total-dividends: u0,
         })
         (var-set last-property-id property-id)
         (ok property-id)
     )
 )
 
-(define-public (mint-share (property-id uint) (recipient principal))
-    (let
-        (
+(define-public (mint-share
+        (property-id uint)
+        (recipient principal)
+    )
+    (let (
             (property (unwrap! (map-get? properties property-id) err-property-not-found))
             (current-minted (get shares-minted property))
             (total-shares (get total-shares property))
@@ -72,24 +97,26 @@
         )
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (asserts! (< current-minted total-shares) err-insufficient-shares)
-        
+
         (try! (nft-mint? fractional-share token-id recipient))
-        
+
         (map-set token-property token-id property-id)
         (map-set share-dividend-claimed token-id current-dividend-per-share)
-        
-        (map-set properties property-id (merge property {
-            shares-minted: (+ current-minted u1)
-        }))
-        
+
+        (map-set properties property-id
+            (merge property { shares-minted: (+ current-minted u1) })
+        )
+
         (var-set last-token-id token-id)
         (ok token-id)
     )
 )
 
-(define-public (deposit-dividends (property-id uint) (amount uint))
-    (let
-        (
+(define-public (deposit-dividends
+        (property-id uint)
+        (amount uint)
+    )
+    (let (
             (property (unwrap! (map-get? properties property-id) err-property-not-found))
             (total-shares (get total-shares property))
             (current-dividend-per-share (get dividend-per-share property))
@@ -98,38 +125,45 @@
         )
         (asserts! (> amount u0) err-invalid-amount)
         (asserts! (> total-shares u0) err-invalid-amount)
-        
+
         (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
-        
-        (map-set properties property-id (merge property {
-            dividend-per-share: (+ current-dividend-per-share divider-increase),
-            total-dividends: (+ current-total-dividends amount)
-        }))
+
+        (map-set properties property-id
+            (merge property {
+                dividend-per-share: (+ current-dividend-per-share divider-increase),
+                total-dividends: (+ current-total-dividends amount),
+            })
+        )
         (ok true)
     )
 )
 
 (define-public (claim-dividends (token-id uint))
-    (let
-        (
+    (let (
             (property-id (unwrap! (map-get? token-property token-id) err-token-not-found))
             (property (unwrap! (map-get? properties property-id) err-property-not-found))
-            (owner (unwrap! (nft-get-owner? fractional-share token-id) err-token-not-found))
+            (owner (unwrap! (nft-get-owner? fractional-share token-id)
+                err-token-not-found
+            ))
             (current-dividend-per-share (get dividend-per-share property))
             (last-claimed-amount (default-to u0 (map-get? share-dividend-claimed token-id)))
             (pending-utils (- current-dividend-per-share last-claimed-amount))
         )
         (asserts! (is-eq tx-sender owner) err-not-token-owner)
         (asserts! (> pending-utils u0) err-nothing-to-claim)
-        
+
         (try! (as-contract (stx-transfer? pending-utils tx-sender owner)))
-        
+
         (map-set share-dividend-claimed token-id current-dividend-per-share)
         (ok pending-utils)
     )
 )
 
-(define-public (transfer (token-id uint) (sender principal) (recipient principal))
+(define-public (transfer
+        (token-id uint)
+        (sender principal)
+        (recipient principal)
+    )
     (begin
         (asserts! (is-eq tx-sender sender) err-not-token-owner)
         (nft-transfer? fractional-share token-id sender recipient)
@@ -148,10 +182,15 @@
     (ok (nft-get-owner? fractional-share token-id))
 )
 
-(define-public (set-token-uri (token-id uint) (new-uri (string-ascii 256)))
+(define-public (set-token-uri
+        (token-id uint)
+        (new-uri (string-ascii 256))
+    )
     (begin
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-        (asserts! (is-some (nft-get-owner? fractional-share token-id)) err-token-not-found)
+        (asserts! (is-some (nft-get-owner? fractional-share token-id))
+            err-token-not-found
+        )
         (map-set token-uri-map token-id new-uri)
         (ok true)
     )
@@ -166,8 +205,7 @@
 )
 
 (define-read-only (get-pending-dividends (token-id uint))
-    (let
-        (
+    (let (
             (property-id (unwrap! (map-get? token-property token-id) (ok u0)))
             (property (unwrap! (map-get? properties property-id) (ok u0)))
             (current-dividend-per-share (get dividend-per-share property))
@@ -182,4 +220,130 @@
 
 (define-read-only (get-contract-balance)
     (stx-get-balance (as-contract tx-sender))
+)
+
+(define-read-only (get-listing (token-id uint))
+    (map-get? market-listings token-id)
+)
+
+(define-public (list-in-marketplace
+        (token-id uint)
+        (price uint)
+    )
+    (let ((owner (unwrap! (nft-get-owner? fractional-share token-id) err-token-not-found)))
+        (asserts! (is-eq tx-sender owner) err-not-token-owner)
+        (asserts! (> price u0) err-price-zero)
+        (try! (nft-transfer? fractional-share token-id tx-sender
+            (as-contract tx-sender)
+        ))
+        (map-set market-listings token-id {
+            price: price,
+            seller: tx-sender,
+        })
+        (ok true)
+    )
+)
+
+(define-public (unlist-in-marketplace (token-id uint))
+    (let (
+            (listing (unwrap! (map-get? market-listings token-id) err-listing-not-found))
+            (seller (get seller listing))
+        )
+        (asserts! (is-eq tx-sender seller) err-not-token-owner)
+        (try! (as-contract (nft-transfer? fractional-share token-id tx-sender seller)))
+        (map-delete market-listings token-id)
+        (ok true)
+    )
+)
+
+(define-public (buy-from-marketplace (token-id uint))
+    (let (
+            (listing (unwrap! (map-get? market-listings token-id) err-listing-not-found))
+            (price (get price listing))
+            (seller (get seller listing))
+            (owner (unwrap! (nft-get-owner? fractional-share token-id)
+                err-token-not-found
+            ))
+            (buyer tx-sender)
+        )
+        (asserts! (not (is-eq buyer seller)) err-cannot-buy-own-token)
+        (asserts! (is-eq owner (as-contract tx-sender)) err-token-not-found)
+        (try! (stx-transfer? price buyer seller))
+        (try! (as-contract (nft-transfer? fractional-share token-id tx-sender buyer)))
+        (map-delete market-listings token-id)
+        (ok true)
+    )
+)
+
+(define-public (configure-buyback
+        (property-id uint)
+        (price uint)
+        (active bool)
+    )
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (asserts! (> price u0) err-price-zero)
+        (let (
+                (current-config (default-to {
+                    price: u0,
+                    balance: u0,
+                    active: false,
+                }
+                    (map-get? property-buyback-config property-id)
+                ))
+                (current-balance (get balance current-config))
+            )
+            (map-set property-buyback-config property-id {
+                price: price,
+                balance: current-balance,
+                active: active,
+            })
+            (ok true)
+        )
+    )
+)
+
+(define-public (fund-buyback
+        (property-id uint)
+        (amount uint)
+    )
+    (let (
+            (current-config (unwrap! (map-get? property-buyback-config property-id)
+                err-property-not-found
+            ))
+            (current-balance (get balance current-config))
+        )
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (asserts! (> amount u0) err-invalid-amount)
+        (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+        (map-set property-buyback-config property-id
+            (merge current-config { balance: (+ current-balance amount) })
+        )
+        (ok true)
+    )
+)
+
+(define-public (sell-share-to-protocol (token-id uint))
+    (let (
+            (property-id (unwrap! (map-get? token-property token-id) err-token-not-found))
+            (config (unwrap! (map-get? property-buyback-config property-id)
+                err-buyback-not-active
+            ))
+            (price (get price config))
+            (balance (get balance config))
+            (owner (unwrap! (nft-get-owner? fractional-share token-id)
+                err-token-not-found
+            ))
+        )
+        (asserts! (is-eq tx-sender owner) err-not-token-owner)
+        (asserts! (get active config) err-buyback-not-active)
+        (asserts! (>= balance price) err-insufficient-buyback-funds)
+        (try! (nft-transfer? fractional-share token-id tx-sender contract-owner))
+        (try! (as-contract (stx-transfer? price tx-sender owner)))
+        (map-set property-buyback-config property-id
+            (merge config { balance: (- balance price) })
+        )
+        (map-delete market-listings token-id)
+        (ok price)
+    )
 )
